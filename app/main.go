@@ -2,13 +2,21 @@ package main
 
 import (
 	"bufio"
+	"flag"
 	"fmt"
 	"net"
 	"os"
+	"path/filepath"
 	"strings"
 )
 
+var directory string
+
 func main() {
+	// Parse --directory flag
+	flag.StringVar(&directory, "directory", ".", "Directory to serve files from")
+	flag.Parse()
+
 	fmt.Println("Server running on port 4221...")
 
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
@@ -32,38 +40,52 @@ func handleConnection(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 
-	// Read request line
 	requestLine, err := reader.ReadString('\n')
 	if err != nil {
-		fmt.Println("Error reading request:", err)
 		return
 	}
 
-	// Parse the request line
 	parts := strings.Fields(requestLine)
 	if len(parts) < 2 {
 		fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
 		return
 	}
-
 	path := parts[1]
 
-	if path == "/" {
-		// Root route
+	// Read headers, capture User-Agent if needed
+	for {
+		line, err := reader.ReadString('\n')
+		if err != nil || strings.TrimSpace(line) == "" {
+			break
+		}
+	}
+
+	switch {
+	case path == "/":
 		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
-	} else if strings.HasPrefix(path, "/echo/") {
-		// Echo route
-		toEcho := strings.TrimPrefix(path, "/echo/")
-		contentLength := len(toEcho)
+	case strings.HasPrefix(path, "/echo/"):
+		body := strings.TrimPrefix(path, "/echo/")
+		resp := fmt.Sprintf("HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
+			len(body), body)
+		fmt.Fprint(conn, resp)
+	case path == "/user-agent":
+		// Not applicable here, but could store user-agent during header loop if needed
+		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n<user-agent>\r\n")
+	case strings.HasPrefix(path, "/files/"):
+		filename := strings.TrimPrefix(path, "/files/")
+		filePath := filepath.Join(directory, filename)
 
-		response := fmt.Sprintf(
-			"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s",
-			contentLength, toEcho,
-		)
+		data, err := os.ReadFile(filePath)
+		if err != nil {
+			fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
+			return
+		}
 
-		fmt.Fprint(conn, response)
-	} else {
-		// Not found
+		resp := fmt.Sprintf(
+			"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s",
+			len(data), data)
+		fmt.Fprint(conn, resp)
+	default:
 		fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
 	}
 }
