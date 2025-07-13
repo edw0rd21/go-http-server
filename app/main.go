@@ -41,79 +41,96 @@ func handleConnection(conn net.Conn) {
 
 	reader := bufio.NewReader(conn)
 
-	// Step 1: Read request line
-	requestLine, err := reader.ReadString('\n')
-	if err != nil {
-		return
-	}
-	parts := strings.Fields(requestLine)
-	if len(parts) < 3 {
-		fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
-		return
-	}
-	method := parts[0]
-	path := parts[1]
-
-	// Step 2: Parse headers
-	headers := make(map[string]string)
 	for {
-		line, err := reader.ReadString('\n')
+		// Step 1: Read request line
+		requestLine, err := reader.ReadString('\n')
 		if err != nil {
+			// Connection closed or interrupted
 			return
 		}
-		line = strings.TrimRight(line, "\r\n")
-		if line == "" {
-			break
-		}
-		kv := strings.SplitN(line, ":", 2)
-		if len(kv) == 2 {
-			headers[strings.TrimSpace(strings.ToLower(kv[0]))] = strings.TrimSpace(kv[1])
-		}
-	}
 
-	// Step 3: Route handling
-	switch {
-	case method == "GET" && path == "/":
-		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
-
-	case method == "GET" && strings.HasPrefix(path, "/files/"):
-		filename := strings.TrimPrefix(path, "/files/")
-		filePath := filepath.Join(directory, filename)
-		data, err := os.ReadFile(filePath)
-		if err != nil {
-			fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
-			return
-		}
-		fmt.Fprintf(conn,
-			"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s",
-			len(data), data)
-
-	case method == "POST" && strings.HasPrefix(path, "/files/"):
-		filename := strings.TrimPrefix(path, "/files/")
-		filePath := filepath.Join(directory, filename)
-
-		// Step 4: Read Content-Length and request body
-		contentLength := 0
-		if val, ok := headers["content-length"]; ok {
-			fmt.Sscanf(val, "%d", &contentLength)
-		}
-
-		body := make([]byte, contentLength)
-		_, err := io.ReadFull(reader, body)
-		if err != nil {
+		parts := strings.Fields(requestLine)
+		if len(parts) < 3 {
 			fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
 			return
 		}
+		method := parts[0]
+		path := parts[1]
 
-		err = os.WriteFile(filePath, body, 0644)
-		if err != nil {
-			fmt.Fprint(conn, "HTTP/1.1 500 Internal Server Error\r\n\r\n")
-			return
+		// Step 2: Read headers
+		headers := make(map[string]string)
+		for {
+			line, err := reader.ReadString('\n')
+			if err != nil {
+				return
+			}
+			line = strings.TrimRight(line, "\r\n")
+			if line == "" {
+				break
+			}
+			kv := strings.SplitN(line, ":", 2)
+			if len(kv) == 2 {
+				headers[strings.ToLower(strings.TrimSpace(kv[0]))] = strings.TrimSpace(kv[1])
+			}
 		}
 
-		fmt.Fprint(conn, "HTTP/1.1 201 Created\r\n\r\n")
+		// Step 3: Read body (if POST)
+		var body []byte
+		if method == "POST" {
+			if val, ok := headers["content-length"]; ok {
+				var contentLength int
+				fmt.Sscanf(val, "%d", &contentLength)
+				body = make([]byte, contentLength)
+				_, err := io.ReadFull(reader, body)
+				if err != nil {
+					fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
+					return
+				}
+			}
+		}
 
-	default:
-		fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
+		// Step 4: Handle the request
+		switch {
+		case method == "GET" && path == "/":
+			fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
+
+		case method == "GET" && strings.HasPrefix(path, "/echo/"):
+			msg := strings.TrimPrefix(path, "/echo/")
+			fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(msg), msg)
+
+		case method == "GET" && path == "/user-agent":
+			ua := headers["user-agent"]
+			fmt.Fprintf(conn, "HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nContent-Length: %d\r\n\r\n%s", len(ua), ua)
+
+		case method == "GET" && strings.HasPrefix(path, "/files/"):
+			filename := strings.TrimPrefix(path, "/files/")
+			filePath := filepath.Join(directory, filename)
+			data, err := os.ReadFile(filePath)
+			if err != nil {
+				fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
+				continue
+			}
+			fmt.Fprintf(conn,
+				"HTTP/1.1 200 OK\r\nContent-Type: application/octet-stream\r\nContent-Length: %d\r\n\r\n%s",
+				len(data), data)
+
+		case method == "POST" && strings.HasPrefix(path, "/files/"):
+			filename := strings.TrimPrefix(path, "/files/")
+			filePath := filepath.Join(directory, filename)
+			err := os.WriteFile(filePath, body, 0644)
+			if err != nil {
+				fmt.Fprint(conn, "HTTP/1.1 500 Internal Server Error\r\n\r\n")
+				return
+			}
+			fmt.Fprint(conn, "HTTP/1.1 201 Created\r\n\r\n")
+
+		default:
+			fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
+		}
+
+		// (Optional) Respect 'Connection: close'
+		if strings.ToLower(headers["connection"]) == "close" {
+			return
+		}
 	}
 }
