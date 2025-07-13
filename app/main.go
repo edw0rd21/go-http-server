@@ -1,18 +1,15 @@
 package main
 
 import (
+	"bufio"
 	"fmt"
 	"net"
 	"os"
+	"strings"
 )
 
-// Ensures gofmt doesn't remove the "net" and "os" imports above (feel free to remove this!)
-var _ = net.Listen
-var _ = os.Exit
-
 func main() {
-	// You can use print statements as follows for debugging, they'll be visible when running tests.
-	fmt.Println("Logs from your program will appear her	e!")
+	fmt.Println("Logs from your program will appear here!")
 
 	l, err := net.Listen("tcp", "0.0.0.0:4221")
 	if err != nil {
@@ -23,15 +20,39 @@ func main() {
 	for {
 		conn, err := l.Accept()
 		if err != nil {
-			fmt.Println("Error accepting connection: ", err.Error())
+			fmt.Println("Error accepting connection:", err.Error())
 			continue
 		}
 
-		_, err = fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
-		if err != nil {
-			fmt.Println("Error writing response: ", err.Error())
-		}
+		go handleConnection(conn)
+	}
+}
 
-		conn.Close()
+func handleConnection(conn net.Conn) {
+	defer conn.Close()
+
+	reader := bufio.NewReader(conn)
+
+	// Read the request line (first line of the HTTP request)
+	requestLine, err := reader.ReadString('\n')
+	if err != nil {
+		fmt.Println("Error reading request:", err.Error())
+		return
+	}
+
+	// Example request line: GET / HTTP/1.1\r\n
+	parts := strings.Split(strings.TrimSpace(requestLine), " ")
+	if len(parts) < 2 {
+		fmt.Fprint(conn, "HTTP/1.1 400 Bad Request\r\n\r\n")
+		return
+	}
+
+	path := parts[1]
+
+	// Route based on path
+	if path == "/" {
+		fmt.Fprint(conn, "HTTP/1.1 200 OK\r\n\r\n")
+	} else {
+		fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
 	}
 }
