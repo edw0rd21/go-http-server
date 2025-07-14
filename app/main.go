@@ -18,11 +18,17 @@ func main() {
 	flag.StringVar(&directory, "directory", ".", "Directory to serve files from")
 	flag.Parse()
 
-	fmt.Println("Server running on port 4221...")
+	//Get port from environment variable
+	port := os.Getenv("PORT")
+	if port == "" {
+		port = "4221" // Default for local development
+	}
 
-	l, err := net.Listen("tcp", "0.0.0.0:4221")
+	fmt.Printf("Server running on port %s...\n", port)
+
+	l, err := net.Listen("tcp", "0.0.0.0:"+port)
 	if err != nil {
-		fmt.Println("Failed to bind to port 4221")
+		fmt.Printf("Failed to bind to port %s\n", port)
 		os.Exit(1)
 	}
 
