@@ -10,12 +10,15 @@ import (
 	"path/filepath"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 var directory string
 
 var userCount int64
 var activeUsers int64
+var serverStartTime time.Time
+var shutdown int32
 
 func main() {
 	// Parse --directory flag
@@ -28,6 +31,7 @@ func main() {
 		port = "4221" // Default for local development
 	}
 
+	serverStartTime = time.Now()
 	fmt.Printf("Server running on port %s...\n", port)
 
 	l, err := net.Listen("tcp", "0.0.0.0:"+port)
@@ -36,9 +40,29 @@ func main() {
 		os.Exit(1)
 	}
 
+	go handleCommands()
+
 	for {
+		// Check if shutdown was requested
+		if atomic.LoadInt32(&shutdown) == 1 {
+			fmt.Println("Shutting down server...")
+			l.Close()
+			break
+		}
+
+		if tcpListener, ok := l.(*net.TCPListener); ok {
+			tcpListener.SetDeadline(time.Now().Add(10 * time.Second))
+
+		}
 		conn, err := l.Accept()
 		if err != nil {
+			if atomic.LoadInt32(&shutdown) == 1 {
+				break
+			}
+			// If it's a timeout error, continue to check shutdown flag
+			if netErr, ok := err.(net.Error); ok && netErr.Timeout() {
+				continue
+			}
 			fmt.Println("Error accepting connection:", err)
 			continue
 		}
@@ -63,6 +87,9 @@ func handleConnection(conn net.Conn) {
 	reader := bufio.NewReader(conn)
 
 	for {
+		if atomic.LoadInt32(&shutdown) == 1 {
+			return
+		}
 		// Step 1: Read request line
 		requestLine, err := reader.ReadString('\n')
 		if err != nil {
@@ -151,9 +178,48 @@ func handleConnection(conn net.Conn) {
 			fmt.Fprint(conn, "HTTP/1.1 404 Not Found\r\n\r\n")
 		}
 
-		// (Optional) Respect 'Connection: close'
+		// Respect 'Connection: close'
 		if strings.ToLower(headers["connection"]) == "close" {
 			return
+		}
+	}
+}
+
+func handleCommands() {
+	scanner := bufio.NewScanner(os.Stdin)
+	for scanner.Scan() {
+		command := strings.TrimSpace(strings.ToLower(scanner.Text()))
+
+		switch command {
+		case "status":
+			uptime := time.Since(serverStartTime)
+			fmt.Printf("\n=== SERVER STATUS ===\n")
+			fmt.Printf("Uptime: %s\n", uptime.String())
+			fmt.Printf("Total Users: %d\n", atomic.LoadInt64(&userCount))
+			fmt.Printf("Active Users: %d\n", atomic.LoadInt64(&activeUsers))
+			fmt.Printf("Directory: %s\n", directory)
+			fmt.Printf("Status: Running\n")
+			fmt.Printf("====================\n\n")
+
+		case "quit":
+			fmt.Println("Initiating server shutdown...")
+			atomic.StoreInt32(&shutdown, 1)
+			return
+
+		case "help":
+			fmt.Println("\nAvailable commands:")
+			fmt.Println("  status - Show server status and statistics")
+			fmt.Println("  quit   - Gracefully shutdown the server")
+			fmt.Println("  help   - Show this help message")
+			fmt.Println()
+
+		case "":
+			// Ignore empty input
+			continue
+
+		default:
+			fmt.Printf("Unknown command: %s\n", command)
+			fmt.Println("Type 'help' for available commands")
 		}
 	}
 }
