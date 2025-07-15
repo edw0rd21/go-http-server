@@ -9,9 +9,13 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync/atomic"
 )
 
 var directory string
+
+var userCount int64
+var activeUsers int64
 
 func main() {
 	// Parse --directory flag
@@ -38,12 +42,23 @@ func main() {
 			fmt.Println("Error accepting connection:", err)
 			continue
 		}
+
+		// Track user count and active users
+		atomic.AddInt64(&userCount, 1)
+		atomic.AddInt64(&activeUsers, 1)
+		fmt.Printf("New user #%d connected from %s | Active users: %d\n",
+			atomic.LoadInt64(&userCount), conn.RemoteAddr(), atomic.LoadInt64(&activeUsers))
+
 		go handleConnection(conn)
 	}
 }
 
 func handleConnection(conn net.Conn) {
-	defer conn.Close()
+	defer func() {
+		conn.Close()
+		atomic.AddInt64(&activeUsers, -1)
+		fmt.Printf("User disconnected from %s | Active users: %d\n", conn.RemoteAddr(), atomic.LoadInt64(&activeUsers))
+	}()
 
 	reader := bufio.NewReader(conn)
 
@@ -62,6 +77,8 @@ func handleConnection(conn net.Conn) {
 		}
 		method := parts[0]
 		path := parts[1]
+
+		fmt.Printf("%s request for %s from %s\n", method, path, conn.RemoteAddr())
 
 		// Step 2: Read headers
 		headers := make(map[string]string)
